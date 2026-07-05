@@ -1,0 +1,118 @@
+# YouTube → Facebook live stream auto-poster
+
+When the **St. George Melkite** YouTube channel goes live, this service automatically
+publishes a post on the parish **Facebook Page** that links directly to the live video.
+
+It listens for YouTube's free WebSub (PubSubHubbub) push notifications, confirms the video
+is actually live via the YouTube Data API, then posts to the Page with the Graph API. Video
+IDs are de-duplicated in SQLite so you never get double posts.
+
+```
+YouTube goes live ──push──▶ /youtube/webhook ──is it live?──▶ post to Facebook Page
+                                    │                              (links to the video)
+                              dedupe (SQLite)
+```
+
+## 1. Get your credentials
+
+You need four secrets. Put them in a `.env` file (copy `.env.example`).
+
+### YouTube channel ID (`YT_CHANNEL_ID`)
+Resolve the `@saintgeorgemelkite` handle to a `UC...` id once:
+```bash
+curl "https://www.googleapis.com/youtube/v3/channels?part=id&forHandle=saintgeorgemelkite&key=YOUR_API_KEY"
+```
+
+### YouTube Data API key (`YT_API_KEY`)
+1. Go to https://console.cloud.google.com/ → create/select a project.
+2. **APIs & Services → Enable APIs** → enable **YouTube Data API v3**.
+3. **Credentials → Create credentials → API key**. Copy it.
+
+### Facebook Page ID + token (`FB_PAGE_ID`, `FB_PAGE_TOKEN`)
+Because the parish administers its own Page, you can post **without full App Review** by
+keeping the app in Development Mode and using a token for your own Page.
+
+1. Go to https://developers.facebook.com/ → **My Apps → Create App** → type **Business**.
+2. In the app, add yourself (the parish admin account) as an app **Admin/Developer**
+   (Roles → Roles). Keep the app in **Development** mode.
+3. Open **Graph API Explorer** (Tools menu). Select your app, and request permissions
+   `pages_manage_posts` and `pages_read_engagement`. Generate a **User** token.
+4. Get your **Page ID** and a **Page token**:
+   ```
+   GET /me/accounts        # returns your Pages, each with "id" and "access_token"
+   ```
+   The `id` is `FB_PAGE_ID`; the `access_token` is a Page token.
+5. Make the token **long-lived** so it doesn't expire:
+   - Exchange the short-lived user token for a long-lived one:
+     `GET /oauth/access_token?grant_type=fb_exchange_token&client_id=APP_ID&client_secret=APP_SECRET&fb_exchange_token=SHORT_USER_TOKEN`
+   - Call `/me/accounts` again **with the long-lived user token**. The Page token you get
+     back does **not** expire. Use that as `FB_PAGE_TOKEN`.
+
+### WebSub secret (`WEBSUB_SECRET`)
+Any long random string, e.g. `openssl rand -hex 32`. Used to verify that pushes really
+come from YouTube's hub.
+
+## 2. Expose the service publicly (Proxmox + Cloudflare Tunnel)
+
+YouTube's hub must reach `<PUBLIC_BASE_URL>/youtube/webhook` over HTTPS. A **Cloudflare
+Tunnel** gives you a stable HTTPS hostname with no router/port-forwarding changes.
+
+1. In the Cloudflare Zero Trust dashboard → **Networks → Tunnels → Create a tunnel**.
+2. Copy the tunnel **token** into your environment as `CLOUDFLARE_TUNNEL_TOKEN`.
+3. Add a **Public Hostname** route: `your-name.yourdomain.com` → `http://app:8000`.
+4. Set `PUBLIC_BASE_URL=https://your-name.yourdomain.com` in `.env`.
+
+## 3. Run it
+
+On the Proxmox LXC/VM (with Docker installed):
+```bash
+cp .env.example .env      # then fill in your values
+echo "CLOUDFLARE_TUNNEL_TOKEN=..." >> .env   # for the cloudflared container
+docker compose up -d --build
+docker compose logs -f app
+```
+On startup the app subscribes to the WebSub hub and re-subscribes automatically every
+~4 days (the hub lease is ~5–10 days). SQLite lives in `./data` (mounted volume).
+
+### Run locally without Docker
+```bash
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements-dev.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+## 4. Verify it works
+
+- **Health:** `curl http://localhost:8000/health` → `{"status":"ok"}`.
+- **Facebook post in isolation** (do this first):
+  ```bash
+  . .venv/bin/activate
+  python -c "import asyncio; from app.facebook import post_to_page; \
+    print(asyncio.run(post_to_page('Test post from the auto-poster')))"
+  ```
+  Confirm the post appears on the Page, then delete it.
+- **Subscription:** check `docker compose logs app` for `WebSub verification ok` shortly
+  after startup — that's YouTube confirming the subscription.
+- **Real dry run:** start a short **unlisted** live stream on the channel. Within ~1 minute
+  a Facebook post should appear linking to that video. (Unlisted streams still generate a
+  feed push.)
+- **Dedupe:** editing that video's title should **not** create a second post.
+
+## Configuration reference
+
+See `.env.example`. Notable options:
+- `POST_TEMPLATE` — message text; `{url}` is replaced with the live video URL.
+- `RENEW_INTERVAL_SECONDS` — how often to renew the WebSub lease (default ~4 days).
+- `DB_PATH` — SQLite dedupe database location.
+
+## Tests
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+## Notes & limitations
+- Posts only when a video's `liveBroadcastContent == "live"`. If you *schedule* streams
+  ahead of time, the app re-checks "upcoming" videos periodically until they go live.
+- Only publishes new posts; it does not edit or delete the post when the stream ends.
+- Posting to Pages you don't administer would require full Meta App Review — not needed here.

@@ -1,0 +1,23 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Persist the dedupe DB across restarts (matches DB_PATH=data/posted.sqlite3)
+      - ./data:/app/data
+    expose:
+      - "8000"
+
+  # Cloudflare Tunnel exposes the app publicly over HTTPS with no port forwarding.
+  # Create a named tunnel in the Cloudflare dashboard and put its token below,
+  # then route the tunnel hostname to http://app:8000. Set PUBLIC_BASE_URL in .env
+  # to that hostname.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - app
