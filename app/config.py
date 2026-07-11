@@ -23,10 +23,12 @@ class Settings(BaseSettings):
     fb_page_token: str
     fb_api_version: str = "v25.0"
 
-    # Post content. The message text supports the {title} placeholder (the live
-    # video's title) and \n for line breaks. The video URL is NOT put in the
-    # text — it is attached as a link preview (see facebook.post_live_video).
-    post_template: str = "{title}"
+    # Post content. The message template supports {title} (the live video's
+    # title), {description} (the POST_DESCRIPTION text below), and \n for line
+    # breaks. The video URL is NOT put in the text — it is attached as a link
+    # preview (see facebook.post_live_video).
+    post_template: str = "{title}\n\n{description}"
+    post_description: str = ""
 
     # Runtime
     db_path: str = "data/posted.sqlite3"
@@ -47,7 +49,10 @@ class Settings(BaseSettings):
 
     def render_message(self, title: str) -> str:
         """Render the post message from the template (\\n decoded to newlines)."""
-        return self.post_template.replace("\\n", "\n").format(title=title)
+        text = self.post_template.replace("\\n", "\n").format(
+            title=title, description=self.post_description
+        )
+        return text.rstrip()
 
 
 settings = Settings()  # type: ignore[call-arg]

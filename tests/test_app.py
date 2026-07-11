@@ -40,8 +40,16 @@ def test_parse_notification_garbage():
 
 
 def test_render_message(monkeypatch):
-    monkeypatch.setattr(settings, "post_template", "{title}\\n\\nWatch live.")
+    monkeypatch.setattr(settings, "post_template", "{title}\\n\\n{description}")
+    monkeypatch.setattr(settings, "post_description", "Watch live.")
     assert settings.render_message("Divine Liturgy") == "Divine Liturgy\n\nWatch live."
+
+
+def test_render_message_empty_description(monkeypatch):
+    monkeypatch.setattr(settings, "post_template", "{title}\\n\\n{description}")
+    monkeypatch.setattr(settings, "post_description", "")
+    # Trailing blank lines from an empty description are stripped.
+    assert settings.render_message("Divine Liturgy") == "Divine Liturgy"
 
 
 def test_store_dedupe(tmp_path):
