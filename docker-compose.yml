@@ -3,19 +3,26 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
+    # Publish on the host loopback only. A public entrypoint (Tailscale Funnel on
+    # the LXC host, or the cloudflared service below) proxies to this port.
+    ports:
+      - "127.0.0.1:8000:8000"
     volumes:
       # Persist the dedupe DB across restarts (matches DB_PATH=data/posted.sqlite3)
       - ./data:/app/data
-    expose:
-      - "8000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-  # Cloudflare Tunnel exposes the app publicly over HTTPS with no port forwarding.
-  # Create a named tunnel in the Cloudflare dashboard and put its token below,
-  # then route the tunnel hostname to http://app:8000. Set PUBLIC_BASE_URL in .env
-  # to that hostname.
+  # Optional Cloudflare Tunnel entrypoint. Only starts when you opt in with:
+  #   docker compose --profile cloudflare up -d
+  # (Not needed when using Tailscale Funnel.) Set CLOUDFLARE_TUNNEL_TOKEN in .env.
   cloudflared:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
+    profiles: ["cloudflare"]
     command: tunnel --no-autoupdate run
     environment:
       - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}

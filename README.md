@@ -52,15 +52,29 @@ keeping the app in Development Mode and using a token for your own Page.
 Any long random string, e.g. `openssl rand -hex 32`. Used to verify that pushes really
 come from YouTube's hub.
 
-## 2. Expose the service publicly (Proxmox + Cloudflare Tunnel)
+## 2. Expose the service publicly
 
-YouTube's hub must reach `<PUBLIC_BASE_URL>/youtube/webhook` over HTTPS. A **Cloudflare
-Tunnel** gives you a stable HTTPS hostname with no router/port-forwarding changes.
+YouTube's hub must reach `<PUBLIC_BASE_URL>/youtube/webhook` over HTTPS with a **stable**
+URL (the app registers this callback on startup). Two supported options:
 
-1. In the Cloudflare Zero Trust dashboard → **Networks → Tunnels → Create a tunnel**.
-2. Copy the tunnel **token** into your environment as `CLOUDFLARE_TUNNEL_TOKEN`.
-3. Add a **Public Hostname** route: `your-name.yourdomain.com` → `http://app:8000`.
-4. Set `PUBLIC_BASE_URL=https://your-name.yourdomain.com` in `.env`.
+### Option A: Tailscale Funnel (no domain, no port-forwarding)
+The app publishes on `127.0.0.1:8000` (see `docker-compose.yml`). Run Tailscale on the
+host and funnel that port:
+```bash
+tailscale funnel --bg 8000
+```
+This serves the app at a stable `https://<machine>.<tailnet>.ts.net`. Set
+`PUBLIC_BASE_URL` to that URL. Requires Funnel enabled for your tailnet (HTTPS + MagicDNS,
+and the `funnel` node attribute in your ACL). In an unprivileged LXC, run tailscaled with
+`--tun=userspace-networking` (Funnel/Serve work in userspace mode).
+
+### Option B: Cloudflare Tunnel
+Requires the domain's DNS to be hosted at Cloudflare.
+1. Cloudflare Zero Trust → **Networks → Tunnels → Create a tunnel**; copy the token to
+   `CLOUDFLARE_TUNNEL_TOKEN` in `.env`.
+2. Add a **Public Hostname** route: `your-name.yourdomain.com` → `http://app:8000`.
+3. Set `PUBLIC_BASE_URL=https://your-name.yourdomain.com`.
+4. Start the extra service: `docker compose --profile cloudflare up -d`.
 
 ## 3. Run it
 
