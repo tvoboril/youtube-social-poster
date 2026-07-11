@@ -15,7 +15,7 @@ from .facebook import post_live_video
 from .scheduler import scheduler, start_scheduler
 from .store import PostedStore
 from .websub import subscribe
-from .youtube import get_live_status
+from .youtube import get_video_info
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("youtube-social-poster")
@@ -95,10 +95,10 @@ async def process_video(video_id: str, attempt: int = 0) -> None:
         logger.info("Video %s already posted; skipping", video_id)
         return
 
-    status = await get_live_status(video_id)
+    status, title = await get_video_info(video_id)
     if status == "live":
         try:
-            await post_live_video(video_id)
+            await post_live_video(video_id, title or "Live now")
         except Exception:  # noqa: BLE001 - keep unposted so a later push can retry
             logger.exception("Facebook post failed for %s; not marking as posted", video_id)
             return

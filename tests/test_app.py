@@ -39,6 +39,11 @@ def test_parse_notification_garbage():
     assert main._parse_notification(b"not xml") == (None, None)
 
 
+def test_render_message(monkeypatch):
+    monkeypatch.setattr(settings, "post_template", "{title}\\n\\nWatch live.")
+    assert settings.render_message("Divine Liturgy") == "Divine Liturgy\n\nWatch live."
+
+
 def test_store_dedupe(tmp_path):
     store = PostedStore(str(tmp_path / "db.sqlite3"))
     assert store.already_posted("abc") is False
@@ -55,23 +60,23 @@ async def test_process_video_posts_when_live(tmp_path, monkeypatch):
 
     posted = []
 
-    async def fake_status(vid):
-        return "live"
+    async def fake_info(vid):
+        return "live", "Sunday Divine Liturgy"
 
-    async def fake_post(vid):
-        posted.append(vid)
+    async def fake_post(vid, title):
+        posted.append((vid, title))
         return "post_1"
 
-    monkeypatch.setattr(main, "get_live_status", fake_status)
+    monkeypatch.setattr(main, "get_video_info", fake_info)
     monkeypatch.setattr(main, "post_live_video", fake_post)
 
     await main.process_video("VIDEO123")
-    assert posted == ["VIDEO123"]
+    assert posted == [("VIDEO123", "Sunday Divine Liturgy")]
     assert store.already_posted("VIDEO123")
 
     # Second push for same video is a no-op (dedupe).
     await main.process_video("VIDEO123")
-    assert posted == ["VIDEO123"]
+    assert posted == [("VIDEO123", "Sunday Divine Liturgy")]
 
 
 @pytest.mark.asyncio
@@ -81,13 +86,13 @@ async def test_process_video_skips_when_not_live(tmp_path, monkeypatch):
 
     posted = []
 
-    async def fake_status(vid):
-        return "none"
+    async def fake_info(vid):
+        return "none", None
 
-    async def fake_post(vid):
+    async def fake_post(vid, title):
         posted.append(vid)
 
-    monkeypatch.setattr(main, "get_live_status", fake_status)
+    monkeypatch.setattr(main, "get_video_info", fake_info)
     monkeypatch.setattr(main, "post_live_video", fake_post)
 
     await main.process_video("REGULARVID")

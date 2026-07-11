@@ -1,4 +1,4 @@
-"""YouTube Data API helpers: check whether a video is currently live."""
+"""YouTube Data API helpers: check a video's live status and title."""
 from __future__ import annotations
 
 import logging
@@ -12,11 +12,12 @@ logger = logging.getLogger(__name__)
 _API_BASE = "https://www.googleapis.com/youtube/v3"
 
 
-async def get_live_status(video_id: str) -> str | None:
-    """Return the video's liveBroadcastContent: "live", "upcoming", "none", or None.
+async def get_video_info(video_id: str) -> tuple[str | None, str | None]:
+    """Return ``(liveBroadcastContent, title)`` for a video.
 
-    None means the video wasn't found (deleted/private) or the API errored.
-    Costs 1 quota unit per call.
+    ``liveBroadcastContent`` is "live", "upcoming", or "none". Returns
+    ``(None, None)`` if the video wasn't found (deleted/private) or the API
+    errored. Costs 1 quota unit per call.
     """
     params = {
         "part": "snippet,liveStreamingDetails",
@@ -28,19 +29,15 @@ async def get_live_status(video_id: str) -> str | None:
 
     if resp.status_code != 200:
         logger.error("YouTube videos.list failed %s: %s", resp.status_code, resp.text)
-        return None
+        return None, None
 
     items = resp.json().get("items", [])
     if not items:
         logger.info("Video %s not found (private/deleted?)", video_id)
-        return None
+        return None, None
 
     snippet = items[0].get("snippet", {})
     status = snippet.get("liveBroadcastContent", "none")
-    logger.info("Video %s liveBroadcastContent=%s", video_id, status)
-    return status
-
-
-async def is_live(video_id: str) -> bool:
-    """True if the video is a live broadcast that is on the air right now."""
-    return (await get_live_status(video_id)) == "live"
+    title = snippet.get("title")
+    logger.info("Video %s liveBroadcastContent=%s title=%r", video_id, status, title)
+    return status, title

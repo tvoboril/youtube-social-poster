@@ -10,9 +10,11 @@ from .config import settings
 logger = logging.getLogger(__name__)
 
 
-async def post_to_page(message: str) -> str:
-    """Publish `message` to the Page feed. Returns the new post id.
+async def post_to_page(message: str, link: str | None = None) -> str:
+    """Publish `message` (with an optional `link`) to the Page feed.
 
+    Passing `link` makes Facebook render a link-preview card from that URL
+    without the raw URL appearing in the message text. Returns the new post id.
     Raises httpx.HTTPStatusError on failure so the caller can avoid marking the
     video as posted (and thus retry on the next notification).
     """
@@ -21,11 +23,13 @@ async def post_to_page(message: str) -> str:
         f"/{settings.fb_page_id}/feed"
     )
     data = {"message": message, "access_token": settings.fb_page_token}
+    if link:
+        data["link"] = link
 
-    # Facebook synchronously scrapes any URL in the message to build the link
-    # preview, so the response can be slow even though the post succeeds. Use a
-    # generous read timeout to avoid a false failure (which would leave the post
-    # unrecorded and risk a duplicate on the next notification).
+    # Facebook synchronously scrapes the link to build the preview card, so the
+    # response can be slow even though the post succeeds. Use a generous read
+    # timeout to avoid a false failure (which would leave the post unrecorded and
+    # risk a duplicate on the next notification).
     timeout = httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(url, data=data)
@@ -39,7 +43,7 @@ async def post_to_page(message: str) -> str:
     return post_id
 
 
-async def post_live_video(video_id: str) -> str:
-    """Format the configured template with the live video URL and publish it."""
-    message = settings.post_template.format(url=settings.video_url(video_id))
-    return await post_to_page(message)
+async def post_live_video(video_id: str, title: str) -> str:
+    """Render the message from the title and publish it with the video as a link."""
+    message = settings.render_message(title)
+    return await post_to_page(message, link=settings.video_url(video_id))

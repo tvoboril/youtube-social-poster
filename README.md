@@ -140,7 +140,9 @@ This is the setup used in production; repeat it per service.
 ## Configuration reference
 
 See `.env.example`. Notable options:
-- `POST_TEMPLATE` — message text; `{url}` is replaced with the live video URL.
+- `POST_TEMPLATE` — post message text; `{title}` is replaced with the live video's
+  title, and `\n` becomes a line break. The video URL is attached as a link-preview
+  card (not inserted into the text).
 - `RENEW_INTERVAL_SECONDS` — how often to renew the WebSub lease (default ~4 days).
 - `DB_PATH` — SQLite dedupe database location.
 
