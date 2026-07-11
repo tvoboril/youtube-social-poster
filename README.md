@@ -78,15 +78,20 @@ Requires the domain's DNS to be hosted at Cloudflare.
 
 ## 3. Run it
 
-On the Proxmox LXC/VM (with Docker installed):
+With Docker installed and `.env` filled in:
 ```bash
-cp .env.example .env      # then fill in your values
-echo "CLOUDFLARE_TUNNEL_TOKEN=..." >> .env   # for the cloudflared container
-docker compose up -d --build
+docker compose --profile cloudflare up -d --build   # omit --profile for Tailscale/other
 docker compose logs -f app
 ```
+Later updates: `./update.sh` (git pull + rebuild + restart).
+
 On startup the app subscribes to the WebSub hub and re-subscribes automatically every
 ~4 days (the hub lease is ~5–10 days). SQLite lives in `./data` (mounted volume).
+
+> **Note:** the hub verifies the subscription by calling your public URL back. If DNS/TLS
+> for `PUBLIC_BASE_URL` isn't live yet (e.g. a brand-new domain still propagating),
+> restart the app once it is so the subscription completes:
+> `docker compose restart app`.
 
 ### Run locally without Docker
 ```bash
@@ -94,6 +99,26 @@ python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements-dev.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
+
+### Deploy on a Proxmox LXC (reusable pattern)
+This is the setup used in production; repeat it per service.
+1. **Create an unprivileged Debian 12 LXC** with Docker's nesting flags:
+   ```bash
+   pct create <vmid> local:vztmpl/debian-12-standard_12.12-1_amd64.tar.zst \
+     --hostname youtube-social-poster --cores 1 --memory 512 --swap 512 \
+     --rootfs <pool>:8 --net0 name=eth0,bridge=vmbr0,ip=dhcp,type=veth \
+     --features nesting=1,keyctl=1 --unprivileged 1 --onboot 1 \
+     --ssh-public-keys yourkey.pub
+   pct start <vmid>
+   ```
+2. **Install Docker + git** inside it: `curl -fsSL https://get.docker.com | sh`.
+3. **Clone this private repo** with a read-only deploy key: generate a key in the
+   container (`ssh-keygen -t ed25519`), add the public key to the repo's
+   *Settings → Deploy keys* (read-only), then
+   `git clone git@github.com:tvoboril/youtube-social-poster /opt/youtube-social-poster`.
+4. **Copy `.env`** (never committed) into `/opt/youtube-social-poster/`.
+5. **Create a Cloudflare Tunnel** for the service (see Option B) and
+   `docker compose --profile cloudflare up -d --build`.
 
 ## 4. Verify it works
 
