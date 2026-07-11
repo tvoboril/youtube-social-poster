@@ -22,7 +22,12 @@ async def post_to_page(message: str) -> str:
     )
     data = {"message": message, "access_token": settings.fb_page_token}
 
-    async with httpx.AsyncClient(timeout=15) as client:
+    # Facebook synchronously scrapes any URL in the message to build the link
+    # preview, so the response can be slow even though the post succeeds. Use a
+    # generous read timeout to avoid a false failure (which would leave the post
+    # unrecorded and risk a duplicate on the next notification).
+    timeout = httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(url, data=data)
 
     if resp.status_code != 200:
