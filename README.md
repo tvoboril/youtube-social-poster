@@ -155,3 +155,7 @@ pytest
   ahead of time, the app re-checks "upcoming" videos periodically until they go live.
 - Only publishes new posts; it does not edit or delete the post when the stream ends.
 - Posting to Pages you don't administer would require full Meta App Review — not needed here.
+
+## License
+
+[MIT](LICENSE) © Tomas Voboril
