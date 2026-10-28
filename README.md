@@ -154,8 +154,12 @@ pytest
 ```
 
 ## Notes & limitations
-- Posts only when a video's `liveBroadcastContent == "live"`. If you *schedule* streams
-  ahead of time, the app re-checks "upcoming" videos periodically until they go live.
+- Posts only when a video's `liveBroadcastContent == "live"`. YouTube notifies when a
+  stream is *scheduled* (often weeks ahead) but usually not when it goes live, so the
+  app remembers upcoming streams in the SQLite db and polls each one from 15 minutes
+  before its scheduled start until it's live (giving up 3 hours after). It also looks
+  up the channel's upcoming streams at startup and every 6 hours (100 quota units each)
+  in case a notification was missed.
 - Only publishes new posts; it does not edit or delete the post when the stream ends.
 - Posting to Pages you don't administer would require full Meta App Review — not needed here.
 
