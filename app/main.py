@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from xml.etree import ElementTree
 
 from fastapi import FastAPI, Request, Response
@@ -15,7 +16,7 @@ from .facebook import post_live_video
 from .scheduler import scheduler, start_scheduler
 from .store import PostedStore
 from .websub import subscribe
-from .youtube import get_video_info
+from .youtube import get_video_info, list_upcoming_video_ids
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("youtube-social-poster")
@@ -25,16 +26,32 @@ store = PostedStore(settings.db_path)
 # Atom / YouTube XML namespaces used in the notification payload.
 _NS = {"atom": "http://www.w3.org/2005/Atom", "yt": "http://www.youtube.com/xml/schemas/2015"}
 
-# If a stream is still "upcoming" when we're notified, re-check a few times as it
-# may flip to "live" shortly after (scheduled streams). Delay in seconds.
-_UPCOMING_RECHECK_DELAY = 120
-_UPCOMING_MAX_RECHECKS = 15  # ~30 min of coverage
+# YouTube notifies us when a stream is scheduled (often weeks ahead) but usually
+# not when it goes live, so for an "upcoming" video we check it ourselves: starting
+# shortly before its scheduled start (streams often begin a few minutes early),
+# then every _POLL_INTERVAL_SECONDS until it's live, giving up _LATE_START after
+# the scheduled start.
+_POLL_INTERVAL_SECONDS = 120
+_EARLY_START = timedelta(minutes=15)
+_LATE_START = timedelta(hours=3)
+# Also look up the channel's upcoming streams directly (at startup and on this
+# interval) in case a WebSub notification was missed.
+_SYNC_UPCOMING_INTERVAL_SECONDS = 6 * 3600
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting up; subscribing to WebSub and starting scheduler")
     start_scheduler()
+    _restore_pending()
+    scheduler.add_job(
+        sync_upcoming,
+        "interval",
+        seconds=_SYNC_UPCOMING_INTERVAL_SECONDS,
+        next_run_time=datetime.now(timezone.utc),
+        id="sync-upcoming",
+        replace_existing=True,
+    )
     await subscribe("subscribe")
     yield
     if scheduler.running:
@@ -89,13 +106,17 @@ async def notify(request: Request) -> Response:
     return Response(status_code=204)
 
 
-async def process_video(video_id: str, attempt: int = 0) -> None:
-    """Post to Facebook if this video is a not-yet-posted live stream."""
+async def process_video(video_id: str) -> None:
+    """Post to Facebook if this video is a not-yet-posted live stream.
+
+    Upcoming streams are remembered and re-checked around their scheduled start.
+    """
     if store.already_posted(video_id):
         logger.info("Video %s already posted; skipping", video_id)
+        store.clear_pending(video_id)
         return
 
-    status, title = await get_video_info(video_id)
+    status, title, scheduled_start = await get_video_info(video_id)
     if status == "live":
         try:
             await post_live_video(video_id, title or "Live now")
@@ -103,27 +124,57 @@ async def process_video(video_id: str, attempt: int = 0) -> None:
             logger.exception("Facebook post failed for %s; not marking as posted", video_id)
             return
         store.mark_posted(video_id)
-    elif status == "upcoming" and attempt < _UPCOMING_MAX_RECHECKS:
-        logger.info(
-            "Video %s upcoming; rechecking in %ss (attempt %s)",
-            video_id, _UPCOMING_RECHECK_DELAY, attempt + 1,
-        )
-        scheduler.add_job(
-            process_video,
-            "date",
-            run_date=_seconds_from_now(_UPCOMING_RECHECK_DELAY),
-            args=[video_id, attempt + 1],
-            id=f"recheck-{video_id}",
-            replace_existing=True,
-        )
+        store.clear_pending(video_id)
+    elif status == "upcoming" or (
+        status is None and store.get_pending(video_id) is not None
+    ):
+        # status None = API error / not found; keep checking a known pending stream.
+        if status == "upcoming":
+            start = scheduled_start or datetime.now(timezone.utc)
+            store.set_pending(video_id, int(start.timestamp()))
+        _schedule_check(video_id, store.get_pending(video_id))
     else:
         logger.info("Video %s status=%s; nothing to post", video_id, status)
+        store.clear_pending(video_id)
 
 
-def _seconds_from_now(seconds: int):
-    from datetime import datetime, timedelta, timezone
+def _schedule_check(video_id: str, scheduled_start: int) -> None:
+    """Schedule the next live check for a pending video, or give up if too late."""
+    now = datetime.now(timezone.utc)
+    start = datetime.fromtimestamp(scheduled_start, timezone.utc)
+    if now > start + _LATE_START:
+        logger.info("Video %s never went live (scheduled %s); giving up", video_id, start)
+        store.clear_pending(video_id)
+        return
 
-    return datetime.now(timezone.utc) + timedelta(seconds=seconds)
+    run_at = max(start - _EARLY_START, now + timedelta(seconds=_POLL_INTERVAL_SECONDS))
+    logger.info(
+        "Video %s upcoming (scheduled %s); next check at %s",
+        video_id, start.isoformat(), run_at.isoformat(timespec="seconds"),
+    )
+    scheduler.add_job(
+        process_video,
+        "date",
+        run_date=run_at,
+        args=[video_id],
+        id=f"recheck-{video_id}",
+        replace_existing=True,
+        misfire_grace_time=None,
+    )
+
+
+async def sync_upcoming() -> None:
+    """Pick up the channel's scheduled streams, whether or not we were notified."""
+    video_ids = await list_upcoming_video_ids()
+    logger.info("Found %s upcoming stream(s) on the channel", len(video_ids))
+    for video_id in video_ids:
+        await process_video(video_id)
+
+
+def _restore_pending() -> None:
+    """Re-schedule checks for upcoming videos remembered across a restart."""
+    for video_id, scheduled_start in store.all_pending():
+        _schedule_check(video_id, scheduled_start)
 
 
 def _valid_signature(header: str, body: bytes) -> bool:
